@@ -2,14 +2,17 @@ package main
 
 import (
 	"fmt"
+	"github.com/russross/blackfriday"
 	"io/ioutil"
 	"os"
 	"path"
 )
 
-func checkStructureAndReturnListOfPosts(basePath string) (files []os.FileInfo, err error) {
-	postsPath := path.Join(basePath, "posts")
+func getPostsPathAndGenPath(basePath string) (postsPath string, genPath string) {
+	return path.Join(basePath, "posts"), path.Join(basePath, "gen")
+}
 
+func checkStructureAndReturnListOfPosts(basePath string, postsPath string, genPath string) (files []os.FileInfo, err error) {
 	// Note: . and .. are not included.
 	allPostFileInfos, err := ioutil.ReadDir(postsPath)
 	if err != nil {
@@ -26,7 +29,6 @@ func checkStructureAndReturnListOfPosts(basePath string) (files []os.FileInfo, e
 		return nil, fmt.Errorf("No posts found!\n")
 	}
 
-	genPath := path.Join(basePath, "gen")
 	err = os.RemoveAll(genPath)
 	// Note: if the path doesn't exist, err will be nil.
 	if err != nil {
@@ -41,16 +43,43 @@ func checkStructureAndReturnListOfPosts(basePath string) (files []os.FileInfo, e
 	return allPostFileInfos, nil
 }
 
+func processPosts(files []os.FileInfo, postsPath string, genPath string) (err error) {
+	for _, v := range files {
+		content, err := ioutil.ReadFile(path.Join(postsPath, v.Name()))
+		if err != nil {
+			return fmt.Errorf("Failed to read file %s: `%v'", v.Name(), err)
+		}
+
+		converted := blackfriday.MarkdownBasic(content)
+
+		err = ioutil.WriteFile(
+			path.Join(genPath, v.Name()),
+			converted,
+			// Read-only.
+			0444)
+		if err != nil {
+			return fmt.Errorf("Failed to write file %s: `%v'", v.Name(), err)
+		}
+	}
+	return nil
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Printf("You must pass a path to the site. No less, no more - just that\n")
 		return
 	}
-
-	_, err := checkStructureAndReturnListOfPosts(os.Args[1])
+	basePath := os.Args[1]
+	postsPath, genPath := getPostsPathAndGenPath(basePath)
+	files, err := checkStructureAndReturnListOfPosts(basePath, postsPath, genPath)
 	if err != nil {
-		fmt.Printf("Failure: %v\n", err)
+		fmt.Printf("Failure: `%v'\n", err)
 		return
 	}
-	fmt.Printf("Didn't encounter any problems, but not going to generate the site either. Come back later when this thing is updated to do something useful.\n")
+
+	err = processPosts(files, postsPath, genPath)
+	if err != nil {
+		fmt.Printf("Failure: `%v'\n", err)
+		return
+	}
 }
