@@ -1,72 +1,152 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"github.com/russross/blackfriday"
 	"io/ioutil"
 	"os"
 	"path"
+	"strings"
+	"time"
 )
 
-func getPostsPathAndGenPath(basePath string) (postsPath string, genPath string) {
+type Post struct {
+	Title, Name string
+
+	Tags []string
+
+	Content []byte
+
+	Date time.Time
+}
+
+func makePostFromContent(name string, rawContent []byte) (*Post, error) {
+	lines := bytes.SplitN(rawContent, []byte("\n"), 5)
+	if len(lines) < 5 {
+		return nil, errors.New("Incorrect header format. Some field is missing.")
+	}
+
+	post := new(Post)
+	post.Name = name
+	post.Title = string(lines[0][:])
+
+	date, err := time.Parse("2006-Jan-02", string(lines[1][:]))
+	if err != nil {
+		return nil, err
+	}
+	post.Date = date
+
+	post.Tags = strings.Split(string(lines[2][:]), " ")
+
+	if len(string(lines[3][:])) != 0 {
+		return nil, errors.New("Header must be separated from content with an empty line.")
+	}
+
+	post.Content = blackfriday.MarkdownBasic(lines[4][:])
+	return post, nil
+}
+
+func getPostsPathAndGenPath(basePath string) (string, string) {
 	return path.Join(basePath, "posts"), path.Join(basePath, "gen")
 }
 
-func checkStructureAndReturnListOfPosts(basePath string, postsPath string, genPath string) (files []os.FileInfo, err error) {
+func checkStructureAndReturnListOfPosts(basePath string, postsPath string, genPath string) ([]os.FileInfo, error) {
 	// Note: . and .. are not included.
 	allPostFileInfos, err := ioutil.ReadDir(postsPath)
 	if err != nil {
-		return nil, fmt.Errorf("Can't read directory %s: `%v'\n", postsPath, err)
+		return nil, fmt.Errorf("Can't read directory %s: `%v'", postsPath, err)
 	}
 
 	for _, fileInfo := range allPostFileInfos {
 		if fileInfo.IsDir() {
-			return nil, fmt.Errorf("Found dir %s in %s. There must be only regular files.\n", fileInfo.Name(), postsPath)
+			return nil, fmt.Errorf("Found dir %s in %s. There must be only regular files.", fileInfo.Name(), postsPath)
 		}
 	}
 
 	if len(allPostFileInfos) == 0 {
-		return nil, fmt.Errorf("No posts found!\n")
+		return nil, fmt.Errorf("No posts found!")
 	}
 
 	err = os.RemoveAll(genPath)
 	// Note: if the path doesn't exist, err will be nil.
 	if err != nil {
-		return nil, fmt.Errorf("Can't remove path %s: `%v'\n", genPath, err)
+		return nil, fmt.Errorf("Can't remove path %s: `%v'", genPath, err)
 	}
 
 	err = os.Mkdir(genPath, 0755)
 	if err != nil {
-		return nil, fmt.Errorf("Can't create path %s: `%v'\n", genPath, err)
+		return nil, fmt.Errorf("Can't create path %s: `%v'", genPath, err)
 	}
 
 	return allPostFileInfos, nil
 }
 
-func processPosts(files []os.FileInfo, postsPath string, genPath string) (err error) {
+func makePostsSlice(files []os.FileInfo, postsPath string) ([]*Post, error) {
+	posts := make([]*Post, 0)
 	for _, v := range files {
 		content, err := ioutil.ReadFile(path.Join(postsPath, v.Name()))
 		if err != nil {
-			return fmt.Errorf("Failed to read file %s: `%v'", v.Name(), err)
+			return nil, fmt.Errorf("Failed to read file %s: `%v'", v.Name(), err)
 		}
 
-		converted := blackfriday.MarkdownBasic(content)
+		post, err := makePostFromContent(v.Name(), content)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to create post %s: `%v'", v.Name(), err)
+		}
+		posts = append(posts, post)
+	}
+	return posts, nil
+}
 
-		err = ioutil.WriteFile(
-			path.Join(genPath, v.Name()),
-			converted,
+func createPostsFiles(posts []*Post, genPath string) error {
+	// Little bit ugly, but who cares?
+	index := "<p>All posts:</p><table><tr><td>Title<td>Date<td>Tags"
+
+	for _, post := range posts {
+		if post.Name == "index.html" {
+			return errors.New("You must not have a post with name index.html.")
+		}
+		postContent := [][]byte{
+			[]byte("<div class='title'>" + post.Title + "</div>"),
+			[]byte("<div class='date'>" + post.Date.Format("2006-Jan-02") + "</div>"),
+			[]byte("<div class='tags'><span>" +
+				strings.Join(post.Tags, "</span><span>") +
+				"</span></div>"),
+			[]byte("<div class='content'>" + string(post.Content[:]) + "</div>"),
+		}
+
+		err := ioutil.WriteFile(
+			path.Join(genPath, post.Name),
+			bytes.Join(postContent, []byte("\n")),
 			// Read-only.
 			0444)
 		if err != nil {
-			return fmt.Errorf("Failed to write file %s: `%v'", v.Name(), err)
+			return err
 		}
+
+		index = index + "<tr><td><a href='" + post.Name + "'>" + post.Title + "</a>" +
+			"<td>" + post.Date.Format("2006-Jan-02") +
+			"<td><span>" + strings.Join(post.Tags, "</span><span>")
 	}
+
+	index = index + "</table>"
+	err := ioutil.WriteFile(
+		path.Join(genPath, "index.html"),
+		[]byte(index),
+		// Read-only.
+		0444)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func main() {
 	if len(os.Args) != 2 {
-		fmt.Printf("You must pass a path to the site. No less, no more - just that\n")
+		fmt.Printf("You must pass a path to the site. No less, no more - just that.\n")
 		return
 	}
 	basePath := os.Args[1]
@@ -77,9 +157,14 @@ func main() {
 		return
 	}
 
-	err = processPosts(files, postsPath, genPath)
+	posts, err := makePostsSlice(files, postsPath)
 	if err != nil {
 		fmt.Printf("Failure: `%v'\n", err)
 		return
+	}
+
+	err = createPostsFiles(posts, genPath)
+	if err != nil {
+		fmt.Printf("Failure: `%v'\n", err)
 	}
 }
