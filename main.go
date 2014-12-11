@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/russross/blackfriday"
+	"io"
 	"io/ioutil"
 	"os"
 	"path"
@@ -48,8 +49,8 @@ func makePostFromContent(name string, rawContent []byte) (*Post, error) {
 	return post, nil
 }
 
-func getPostsPathAndGenPath(basePath string) (string, string) {
-	return path.Join(basePath, "posts"), path.Join(basePath, "gen")
+func getSitePaths(basePath string) (postsPath string, genPath string, assetsPath string) {
+	return path.Join(basePath, "posts"), path.Join(basePath, "gen"), path.Join(basePath, "assets")
 }
 
 func checkStructureAndReturnListOfPosts(basePath string, postsPath string, genPath string) ([]os.FileInfo, error) {
@@ -102,13 +103,16 @@ func makePostsSlice(files []os.FileInfo, postsPath string) ([]*Post, error) {
 
 func createPostsFiles(posts []*Post, genPath string) error {
 	// Little bit ugly, but who cares?
-	index := "<p>All posts:</p><table><tr><td>Title<td>Date<td>Tags"
+	header := "<head><link rel='stylesheet' type='text/css' href='style.css'>" +
+		"<meta http-equiv='Content-Type' content='text/html;charset=ISO-8859-8'></head>"
+	index := header + "<p>All posts:</p><table><tr><td>Title<td>Date<td>Tags"
 
 	for _, post := range posts {
 		if post.Name == "index.html" {
 			return errors.New("You must not have a post with name index.html.")
 		}
 		postContent := [][]byte{
+			[]byte(header),
 			[]byte("<div class='title'>" + post.Title + "</div>"),
 			[]byte("<div class='date'>" + post.Date.Format("2006-Jan-02") + "</div>"),
 			[]byte("<div class='tags'><span>" +
@@ -126,9 +130,15 @@ func createPostsFiles(posts []*Post, genPath string) error {
 			return err
 		}
 
-		index = index + "<tr><td><a href='" + post.Name + "'>" + post.Title + "</a>" +
-			"<td>" + post.Date.Format("2006-Jan-02") +
-			"<td><span>" + strings.Join(post.Tags, "</span><span>")
+		index = index +
+			"<tr><td><a href='" +
+			post.Name +
+			"'>" +
+			post.Title +
+			"</a><td>" + post.Date.Format("2006-Jan-02") +
+			"<td><div class='tags'><span>" +
+			strings.Join(post.Tags, "</span><span>") +
+			"</span></div>"
 	}
 
 	index = index + "</table>"
@@ -144,13 +154,61 @@ func createPostsFiles(posts []*Post, genPath string) error {
 	return nil
 }
 
+func copyAssets(assetsPath string, genPath string) error {
+	// Note: . and .. are not included.
+	allPostFileInfos, err := ioutil.ReadDir(assetsPath)
+	if err != nil {
+		return fmt.Errorf("Can't read directory %s: `%v'", assetsPath, err)
+	}
+
+	for _, fileInfo := range allPostFileInfos {
+		if fileInfo.IsDir() {
+			return fmt.Errorf("Found dir %s in %s. There must be only regular files.", fileInfo.Name(), assetsPath)
+		}
+
+		pathToGeneratedFile := path.Join(genPath, fileInfo.Name())
+
+		// Based on
+		// https://www.socketloop.com/tutorials/golang-copy-file
+		//
+		err := func(src string, dest string) error {
+			r, err := os.Open(src)
+			if err != nil {
+				return err
+			}
+			defer r.Close()
+			w, err := os.Create(dest)
+			if err != nil {
+				return err
+			}
+			defer w.Close()
+			_, err = io.Copy(w, r)
+			return err
+		}(path.Join(assetsPath, fileInfo.Name()),
+			pathToGeneratedFile)
+
+		if err != nil {
+			return fmt.Errorf("Failed to copy asset: %v", fileInfo.Name())
+		}
+
+		err = os.Chmod(pathToGeneratedFile,
+			// Read-only.
+			0444)
+		if err != nil {
+			return fmt.Errorf("Failed to change mode on the create assets file: %v",
+				pathToGeneratedFile)
+		}
+	}
+	return nil
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Printf("You must pass a path to the site. No less, no more - just that.\n")
 		return
 	}
 	basePath := os.Args[1]
-	postsPath, genPath := getPostsPathAndGenPath(basePath)
+	postsPath, genPath, assetsPath := getSitePaths(basePath)
 	files, err := checkStructureAndReturnListOfPosts(basePath, postsPath, genPath)
 	if err != nil {
 		fmt.Printf("Failure: `%v'\n", err)
@@ -167,4 +225,6 @@ func main() {
 	if err != nil {
 		fmt.Printf("Failure: `%v'\n", err)
 	}
+
+	err = copyAssets(assetsPath, genPath)
 }
