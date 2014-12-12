@@ -10,17 +10,20 @@ import (
 	"os"
 	"path"
 	"strings"
+	"text/template"
 	"time"
 )
 
 type Post struct {
-	Title, Name string
+	Title, Name, Content string
 
 	Tags []string
 
-	Content []byte
-
 	Date time.Time
+}
+
+type Index struct {
+	Posts []*Post
 }
 
 func makePostFromContent(name string, rawContent []byte) (*Post, error) {
@@ -45,12 +48,12 @@ func makePostFromContent(name string, rawContent []byte) (*Post, error) {
 		return nil, errors.New("Header must be separated from content with an empty line.")
 	}
 
-	post.Content = blackfriday.MarkdownBasic(lines[4][:])
+	post.Content = string(blackfriday.MarkdownBasic(lines[4][:])[:])
 	return post, nil
 }
 
-func getSitePaths(basePath string) (postsPath string, genPath string, assetsPath string) {
-	return path.Join(basePath, "posts"), path.Join(basePath, "gen"), path.Join(basePath, "assets")
+func getSitePaths(basePath string) (postsPath string, genPath string, assetsPath string, tempaltesPath string) {
+	return path.Join(basePath, "posts"), path.Join(basePath, "gen"), path.Join(basePath, "assets"), path.Join(basePath, "templates")
 }
 
 func checkStructureAndReturnListOfPosts(basePath string, postsPath string, genPath string) ([]os.FileInfo, error) {
@@ -101,50 +104,44 @@ func makePostsSlice(files []os.FileInfo, postsPath string) ([]*Post, error) {
 	return posts, nil
 }
 
-func createPostsFiles(posts []*Post, genPath string) error {
-	// Little bit ugly, but who cares?
-	header := "<head><link rel='stylesheet' type='text/css' href='style.css'>" +
-		"<meta http-equiv='Content-Type' content='text/html;charset=ISO-8859-8'></head>"
-	index := header + "<p>All posts:</p><table><tr><td>Title<td>Date<td>Tags"
+func createPostsFiles(posts []*Post, genPath string, templatesPath string) error {
+	postTemplate := template.New("post")
+	postTemplate, err := postTemplate.ParseFiles(path.Join(templatesPath, "post"))
+	if err != nil {
+		return err
+	}
+
+	indexTemplate := template.New("index")
+	indexTemplate, err = indexTemplate.ParseFiles(path.Join(templatesPath, "index"))
+	if err != nil {
+		return err
+	}
+	var indexContent bytes.Buffer
+	err = indexTemplate.Execute(&indexContent, Index{posts})
 
 	for _, post := range posts {
 		if post.Name == "index.html" {
 			return errors.New("You must not have a post with name index.html.")
 		}
-		postContent := [][]byte{
-			[]byte(header),
-			[]byte("<div class='title'>" + post.Title + "</div>"),
-			[]byte("<div class='date'>" + post.Date.Format("2006-Jan-02") + "</div>"),
-			[]byte("<div class='tags'><span>" +
-				strings.Join(post.Tags, "</span><span>") +
-				"</span></div>"),
-			[]byte("<div class='content'>" + string(post.Content[:]) + "</div>"),
+		var postContent bytes.Buffer
+		err = postTemplate.Execute(&postContent, post)
+		if err != nil {
+			return err
 		}
 
-		err := ioutil.WriteFile(
+		err = ioutil.WriteFile(
 			path.Join(genPath, post.Name),
-			bytes.Join(postContent, []byte("\n")),
+			postContent.Bytes(),
 			// Read-only.
 			0444)
 		if err != nil {
 			return err
 		}
-
-		index = index +
-			"<tr><td><a href='" +
-			post.Name +
-			"'>" +
-			post.Title +
-			"</a><td>" + post.Date.Format("2006-Jan-02") +
-			"<td><div class='tags'><span>" +
-			strings.Join(post.Tags, "</span><span>") +
-			"</span></div>"
 	}
 
-	index = index + "</table>"
-	err := ioutil.WriteFile(
+	err = ioutil.WriteFile(
 		path.Join(genPath, "index.html"),
-		[]byte(index),
+		indexContent.Bytes(),
 		// Read-only.
 		0444)
 	if err != nil {
@@ -208,7 +205,7 @@ func main() {
 		return
 	}
 	basePath := os.Args[1]
-	postsPath, genPath, assetsPath := getSitePaths(basePath)
+	postsPath, genPath, assetsPath, templatesPath := getSitePaths(basePath)
 	files, err := checkStructureAndReturnListOfPosts(basePath, postsPath, genPath)
 	if err != nil {
 		fmt.Printf("Failure: `%v'\n", err)
@@ -221,10 +218,13 @@ func main() {
 		return
 	}
 
-	err = createPostsFiles(posts, genPath)
+	err = createPostsFiles(posts, genPath, templatesPath)
 	if err != nil {
 		fmt.Printf("Failure: `%v'\n", err)
 	}
 
 	err = copyAssets(assetsPath, genPath)
+	if err != nil {
+		fmt.Printf("Failure: `%v'\n", err)
+	}
 }
