@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel='stylesheet' type='text/css' href='style.css'/>
+    <meta http-equiv='Content-Type' content='text/html;charset=ISO-8859-8'/>
+    <title>{{.Title}}</title>
+  </head>
+  <body>
+    <div id='post-all'>
+      <div id='post-title'><span class='title'>{{.Title}}</span></div>
+      <div id='post-date'><span class='date'>{{.Date}}</span></div>
+      <div id='post-tags'>
+        {{range .Tags}}
+        <span class='tags'>{{.}}</span>
+        {{end}}
+      </div>
+      <div id='post-content'>{{.Content}}</div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <link rel='stylesheet' type='text/css' href='stylen.css'/>
+    <meta http-equiv='Content-Type' content='text/html;charset=ISO-8859-8'/>
+  </head>
+  <body>
+    <div id='posts-list'>
+      {{range .Posts}}
+      <div class='posts-entry'>
+        <span class='posts-entry-link'>
+          <a href="{{.Name}}">{{.Title}}</a>
+        </span>
+        <span class='posts-entry-date'>
+          {{.Date.Format "2006-Jan-2"}}
+        </span>
+        <span class='posts-tags'>
+          {{range .Tags}}
+          <span class='tags'>{{.}}</span>
+          {{end}}
+        </span>
+      </div>
+      {{end}}
+    </div>
+  </body>
+</html>
